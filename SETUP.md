@@ -17,7 +17,7 @@ orders, manager invitations, social links, and uploaded images.
    ```sql
    update public.profiles
    set role = 'admin'
-   where email = lower('owner@example.com');
+   where email = lower('sherifeltahawy86@gmail.com');
    ```
 
 5. Sign in again. The administrator dashboard can invite additional managers

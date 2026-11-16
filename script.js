@@ -314,19 +314,32 @@ function updateSocialLinks() {
   container.setAttribute("aria-label", language === "ar" ? "تواصل مع المتجر" : "Contact the store");
 
   const links = [
-    ["instagram_url", "Instagram", "IG"],
-    ["tiktok_url", "TikTok", "TT"],
-    ["facebook_url", "Facebook", "f"]
-  ].filter(([key]) => storeSettings[key]);
+    ["instagram_url", "Instagram"],
+    ["tiktok_url", "TikTok"],
+    ["facebook_url", "Facebook"]
+  ];
 
-  if (storeSettings.phone) links.push(["phone", text("storePhone"), "☎"]);
+  if (storeSettings.phone) links.push(["phone", text("storePhone")]);
 
-  container.innerHTML = links.map(([key, label, icon]) => {
+  const icons = {
+    Instagram: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"></rect><circle cx="12" cy="12" r="4"></circle><circle class="social-icon-dot" cx="17.5" cy="6.5" r="1"></circle></svg>`,
+    TikTok: `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="social-icon-fill" d="M19.6 7.3a6.8 6.8 0 0 1-4.3-1.6v8.1a6.1 6.1 0 1 1-5.3-6.1v3.4a2.8 2.8 0 1 0 1.9 2.7V2h3.4a6.8 6.8 0 0 0 4.3 4.1v1.2Z"></path></svg>`,
+    Facebook: `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="social-icon-fill" d="M13.6 21v-8.2h2.8l.4-3.2h-3.2V7.5c0-.9.3-1.5 1.6-1.5H17V3.1c-.3 0-1.3-.1-2.5-.1-2.5 0-4.2 1.5-4.2 4.3v2.3H7.5v3.2h2.8V21h3.3Z"></path></svg>`,
+    phone: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5 4.5 5c-.9.6-.8 2.5.1 4.7 1.5 3.7 5.2 7.4 8.9 8.9 2.2.9 4.1 1 4.7.1l1.5-2.5-4.2-2-1.5 1.7a14 14 0 0 1-5.2-5.2l1.7-1.5-2-4.2Z"></path></svg>`
+  };
+
+  container.innerHTML = links.map(([key, label]) => {
+    const configured = key === "phone" ? storeSettings.phone : storeSettings[key];
     const href = key === "phone"
       ? `tel:${escapeAttribute(storeSettings.phone.replace(/[^\d+]/g, ""))}`
-      : escapeAttribute(storeSettings[key]);
+      : escapeAttribute(storeSettings[key] || "");
     const external = key === "phone" ? "" : ' target="_blank" rel="noopener noreferrer"';
-    return `<a href="${href}" aria-label="${escapeAttribute(label)}" title="${escapeAttribute(label)}"${external}>${icon}</a>`;
+    const icon = key === "phone" ? icons.phone : icons[label];
+    const className = `social-link social-link-${key === "phone" ? "phone" : key.replace("_url", "")}`;
+    if (!configured) {
+      return `<span class="${className} is-unconfigured" role="img" aria-label="${escapeAttribute(label)}">${icon}</span>`;
+    }
+    return `<a class="${className}" href="${href}" aria-label="${escapeAttribute(label)}" title="${escapeAttribute(label)}"${external}>${icon}</a>`;
   }).join("");
 }
 
