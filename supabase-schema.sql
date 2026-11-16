@@ -66,10 +66,26 @@ create table if not exists public.support_messages (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  type text not null check (type in (
+    'product_new', 'product_updated', 'new_order',
+    'order_status', 'admin_invite', 'support_message'
+  )),
+  data jsonb not null default '{}'::jsonb,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
 create index if not exists support_sessions_updated_at_idx
   on public.support_sessions (updated_at desc);
 create index if not exists support_messages_session_created_idx
   on public.support_messages (session_id, created_at);
+create index if not exists notifications_user_created_idx
+  on public.notifications (user_id, created_at desc);
+create index if not exists notifications_unread_user_idx
+  on public.notifications (user_id) where read_at is null;
 
 insert into public.store_settings (id) values (1) on conflict (id) do nothing;
 
@@ -81,6 +97,9 @@ grant insert, update, delete on public.products to authenticated;
 grant insert, update on public.store_settings to authenticated;
 grant select, insert on public.support_sessions to authenticated;
 grant select, insert on public.support_messages to authenticated;
+revoke all on public.notifications from anon, authenticated;
+grant select on public.notifications to authenticated;
+grant update (read_at) on public.notifications to authenticated;
 grant usage, select on sequence public.products_id_seq to authenticated;
 
 create or replace function public.is_store_admin()
@@ -167,6 +186,9 @@ begin
     update public.admin_invites
     set accepted_at = now()
     where email = lower(new.email) and accepted_at is null;
+
+    insert into public.notifications (user_id, type)
+    values (new.id, 'admin_invite');
   end if;
 
   return new;
@@ -238,6 +260,148 @@ create trigger before_store_order_insert
 before insert on public.orders
 for each row execute procedure public.set_order_snapshot();
 
+create or replace function public.notify_product_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  notification_type text;
+begin
+  if tg_op = 'UPDATE' then
+    if old.name_en is not distinct from new.name_en
+      and old.name_ar is not distinct from new.name_ar
+      and old.category is not distinct from new.category
+      and old.price is not distinct from new.price
+      and old.image_url is not distinct from new.image_url then
+      return new;
+    end if;
+    notification_type := 'product_updated';
+  else
+    notification_type := 'product_new';
+  end if;
+
+  insert into public.notifications (user_id, type, data)
+  select p.id, notification_type, jsonb_build_object(
+    'product_id', new.id,
+    'name_en', new.name_en,
+    'name_ar', new.name_ar
+  )
+  from public.profiles p;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.notify_product_change() from public;
+drop trigger if exists on_store_product_changed on public.products;
+create trigger on_store_product_changed
+after insert or update on public.products
+for each row execute procedure public.notify_product_change();
+
+create or replace function public.notify_new_order()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  insert into public.notifications (user_id, type, data)
+  select p.id, 'new_order', jsonb_build_object('order_id', new.id)
+  from public.profiles p
+  where p.role = 'admin';
+  return new;
+end;
+$$;
+
+revoke all on function public.notify_new_order() from public;
+drop trigger if exists on_store_order_created on public.orders;
+create trigger on_store_order_created
+after insert on public.orders
+for each row execute procedure public.notify_new_order();
+
+create or replace function public.notify_order_status()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  insert into public.notifications (user_id, type, data)
+  values (
+    new.user_id,
+    'order_status',
+    jsonb_build_object('order_id', new.id, 'status', new.status)
+  );
+  return new;
+end;
+$$;
+
+revoke all on function public.notify_order_status() from public;
+drop trigger if exists on_store_order_status_changed on public.orders;
+create trigger on_store_order_status_changed
+after update of status on public.orders
+for each row
+when (old.status is distinct from new.status)
+execute procedure public.notify_order_status();
+
+create or replace function public.notify_admin_role()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if old.role is distinct from new.role and new.role = 'admin' then
+    insert into public.notifications (user_id, type)
+    values (new.id, 'admin_invite');
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.notify_admin_role() from public;
+drop trigger if exists on_store_admin_role_changed on public.profiles;
+create trigger on_store_admin_role_changed
+after update of role on public.profiles
+for each row
+when (old.role is distinct from new.role)
+execute procedure public.notify_admin_role();
+
+create or replace function public.notify_support_message()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  customer_id uuid;
+begin
+  select s.user_id into customer_id
+  from public.support_sessions s
+  where s.id = new.session_id;
+
+  if new.sender_id = customer_id then
+    insert into public.notifications (user_id, type, data)
+    select p.id, 'support_message', jsonb_build_object('session_id', new.session_id)
+    from public.profiles p
+    where p.role = 'admin';
+  else
+    insert into public.notifications (user_id, type, data)
+    values (customer_id, 'support_message', jsonb_build_object('session_id', new.session_id));
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.notify_support_message() from public;
+drop trigger if exists on_store_support_message_notified on public.support_messages;
+create trigger on_store_support_message_notified
+after insert on public.support_messages
+for each row execute procedure public.notify_support_message();
+
 alter table public.profiles enable row level security;
 alter table public.products enable row level security;
 alter table public.orders enable row level security;
@@ -245,6 +409,7 @@ alter table public.admin_invites enable row level security;
 alter table public.store_settings enable row level security;
 alter table public.support_sessions enable row level security;
 alter table public.support_messages enable row level security;
+alter table public.notifications enable row level security;
 
 drop policy if exists "Profiles visible to owner and admins" on public.profiles;
 create policy "Profiles visible to owner and admins"
@@ -346,6 +511,17 @@ with check (
       )
   )
 );
+
+drop policy if exists "Users view their own notifications" on public.notifications;
+create policy "Users view their own notifications"
+on public.notifications for select to authenticated
+using (user_id = (select auth.uid()));
+
+drop policy if exists "Users mark their own notifications read" on public.notifications;
+create policy "Users mark their own notifications read"
+on public.notifications for update to authenticated
+using (user_id = (select auth.uid()))
+with check (user_id = (select auth.uid()));
 
 insert into public.products (name_en, name_ar, category, price, image_url)
 select seed.name_en, seed.name_ar, seed.category, seed.price, seed.image_url

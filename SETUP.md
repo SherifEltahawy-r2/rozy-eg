@@ -5,8 +5,8 @@ orders, manager invitations, social links, and uploaded images.
 
 1. Create a Supabase project. In its SQL Editor, run the **latest complete
    contents** of `supabase-schema.sql`. If the shop was already set up, run
-   the updated file again to add the private support-chat tables and access
-   policies.
+   the updated file again to add any new tables, policies, and triggers,
+   including private support chat and per-account notifications.
 2. Put the project's **Project URL** and **publishable/anon key** in
    `config.js`. Never put a `service_role` key in this website.
 3. Open the website over HTTPS (or localhost), register the store owner's
@@ -27,6 +27,9 @@ orders, manager invitations, social links, and uploaded images.
 7. Customers can open private technical-support chats after placing an order.
    Each customer's messages are isolated by database policies; administrators
    can review and reply to all support conversations from the support page.
+8. Signed-in users see their own in-site notifications for product changes,
+   order updates, administrator invitations, and support messages. Re-run the
+   latest `supabase-schema.sql` to enable notification storage and event triggers.
 
 The install icon is offered by supported browsers when the site is served over
 HTTPS. On iPhone/iPad, use the browser's **Add to Home Screen** action.

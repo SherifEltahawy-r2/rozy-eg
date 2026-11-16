@@ -51,6 +51,20 @@
         <b id="cart-count">0</b>
       </a>
       <a href="#account" id="account-link" data-i="login">دخول</a>
+      <div class="notification-wrap" id="notification-wrap" hidden>
+        <button id="notifications-button" class="notification-button" type="button" data-action="toggle-notifications" aria-label="الإشعارات" aria-haspopup="true" aria-controls="notifications-panel" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"></path></svg>
+          <span class="notification-count" id="notification-count" hidden></span>
+          <span class="sr-only" data-i="notifications">الإشعارات</span>
+        </button>
+        <section class="notifications-panel" id="notifications-panel" aria-label="الإشعارات" hidden>
+          <div class="notifications-heading">
+            <h2 data-i="notifications">الإشعارات</h2>
+            <button type="button" data-action="mark-all-notifications" data-i="markAllRead">تحديد الكل كمقروء</button>
+          </div>
+          <div id="notifications-list" class="notifications-list" aria-live="polite"></div>
+        </section>
+      </div>
       <button id="install-app" type="button" hidden aria-label="تثبيت التطبيق">تثبيت</button>
     </div>
   </header>

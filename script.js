@@ -8,6 +8,18 @@ const translations = {
     shop: "Shop",
     story: "Our story",
     support: "Chat & support",
+    notifications: "Notifications",
+    markAllRead: "Mark all as read",
+    noNotifications: "You're all caught up.",
+    notificationsSetup: "Notifications are unavailable until the database setup is complete.",
+    notificationProductNew: "New product",
+    notificationProductUpdated: "Product updated",
+    notificationNewOrder: "New order received",
+    notificationOrderStatus: "Your order status changed",
+    notificationAdminInvite: "You are now a store administrator",
+    notificationSupportMessage: "New support message",
+    notificationOrderStatusBody: "Order status: {status}",
+    notificationSupportBody: "A new message is waiting in technical support.",
     supportTitle: "Technical support",
     supportIntro: "Your conversation is private and visible only to you and the store team.",
     supportSignIn: "Sign in to contact technical support.",
@@ -97,6 +109,18 @@ const translations = {
     shop: "تسوقي",
     story: "قصتنا",
     support: "الدردشة والدعم الفني",
+    notifications: "الإشعارات",
+    markAllRead: "تحديد الكل كمقروء",
+    noNotifications: "لا توجد إشعارات جديدة.",
+    notificationsSetup: "الإشعارات غير متاحة حتى يكتمل إعداد قاعدة البيانات.",
+    notificationProductNew: "منتج جديد",
+    notificationProductUpdated: "تم تحديث منتج",
+    notificationNewOrder: "وصل طلب جديد",
+    notificationOrderStatus: "تم تحديث حالة طلبك",
+    notificationAdminInvite: "أصبحت مسؤولًا عن المتجر",
+    notificationSupportMessage: "رسالة دعم جديدة",
+    notificationOrderStatusBody: "حالة الطلب: {status}",
+    notificationSupportBody: "توجد رسالة جديدة في الدعم الفني.",
     supportTitle: "الدردشة والدعم الفني",
     supportIntro: "محادثتك خاصة ولا يراها إلا أنت وفريق المتجر.",
     supportSignIn: "سجّل الدخول للتواصل مع الدعم الفني.",
@@ -241,6 +265,13 @@ let editingProductId = null;
 let supportSessions = [];
 let supportPollTimer = null;
 let supportPollRunning = false;
+let notifications = [];
+let notificationUnreadCount = 0;
+let notificationsAvailable = true;
+let notificationErrorShown = false;
+let notificationsOpen = false;
+let notificationPollTimer = null;
+let notificationPollRunning = false;
 
 function readJSON(key, fallback) {
   try {
@@ -304,8 +335,169 @@ function updateHeader() {
     supportLink.setAttribute("aria-label", text("support"));
   }
 
+  const notificationWrap = $("#notification-wrap");
+  if (notificationWrap) notificationWrap.hidden = !currentUser;
+  const notificationButton = $("#notifications-button");
+  if (notificationButton) {
+    notificationButton.setAttribute("aria-expanded", String(notificationsOpen));
+    notificationButton.setAttribute("aria-label", text("notifications"));
+  }
+  $("#notifications-panel")?.setAttribute("aria-label", text("notifications"));
+  renderNotificationsPanel();
+
   updateSocialLinks();
   applyTheme();
+}
+
+function notificationTitle(notification) {
+  const data = notification.data || {};
+  const productName = language === "ar" ? data.name_ar : data.name_en;
+  const titles = {
+    product_new: text("notificationProductNew"),
+    product_updated: text("notificationProductUpdated"),
+    new_order: text("notificationNewOrder"),
+    order_status: text("notificationOrderStatus"),
+    admin_invite: text("notificationAdminInvite"),
+    support_message: text("notificationSupportMessage")
+  };
+  const title = titles[notification.type] || text("notifications");
+  return productName ? `${title}: ${productName}` : title;
+}
+
+function notificationBody(notification) {
+  if (notification.type === "order_status") {
+    const statusKey = String(notification.data?.status || "").toLowerCase();
+    return text("notificationOrderStatusBody").replace("{status}", text(statusKey));
+  }
+  if (notification.type === "support_message") return text("notificationSupportBody");
+  return "";
+}
+
+function renderNotificationsPanel() {
+  const count = $("#notification-count");
+  const list = $("#notifications-list");
+  const panel = $("#notifications-panel");
+  if (!count || !list || !panel) return;
+
+  count.hidden = notificationUnreadCount === 0;
+  count.textContent = notificationUnreadCount > 9 ? "9+" : String(notificationUnreadCount);
+  const markAllButton = panel.querySelector('[data-action="mark-all-notifications"]');
+  if (markAllButton) markAllButton.disabled = !notificationsAvailable || notificationUnreadCount === 0;
+  panel.hidden = !notificationsOpen;
+
+  if (!notificationsAvailable) {
+    list.innerHTML = `<p class="notifications-empty">${escapeHTML(text("notificationsSetup"))}</p>`;
+    return;
+  }
+
+  if (!notifications.length) {
+    list.innerHTML = `<p class="notifications-empty">${escapeHTML(text("noNotifications"))}</p>`;
+    return;
+  }
+
+  list.innerHTML = notifications.map(notification => {
+    const target = notification.type === "new_order"
+      ? "admin"
+      : notification.type === "support_message"
+        ? "support"
+        : notification.type === "product_new" || notification.type === "product_updated"
+          ? `product-${notification.data?.product_id || ""}`
+          : "";
+    const date = new Date(notification.created_at);
+    const formattedDate = Number.isNaN(date.getTime())
+      ? ""
+      : new Intl.DateTimeFormat(language === "ar" ? "ar" : "en", { dateStyle: "short", timeStyle: "short" }).format(date);
+    return `
+      <button class="notification-item${notification.read_at ? "" : " is-unread"}" type="button"
+        data-action="open-notification" data-id="${escapeAttribute(notification.id)}"
+        data-href="${escapeAttribute(target)}">
+        <span class="notification-item-dot" aria-hidden="true"></span>
+        <span class="notification-item-copy">
+          <strong>${escapeHTML(notificationTitle(notification))}</strong>
+          ${notificationBody(notification) ? `<small>${escapeHTML(notificationBody(notification))}</small>` : ""}
+          ${formattedDate ? `<time datetime="${escapeAttribute(notification.created_at)}">${escapeHTML(formattedDate)}</time>` : ""}
+        </span>
+      </button>`;
+  }).join("");
+}
+
+async function refreshNotifications() {
+  if (!supabaseClient || !currentUser) return;
+  const userId = currentUser.id;
+  const [listResult, countResult] = await Promise.all([
+    supabaseClient.from("notifications")
+      .select("id, type, data, read_at, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(30),
+    supabaseClient.from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .is("read_at", null)
+  ]);
+  if (listResult.error) throw listResult.error;
+  if (countResult.error) throw countResult.error;
+  if (!currentUser || currentUser.id !== userId) return;
+
+  notifications = listResult.data || [];
+  notificationUnreadCount = countResult.count || 0;
+  notificationsAvailable = true;
+  notificationErrorShown = false;
+  renderNotificationsPanel();
+}
+
+function clearNotifications() {
+  notifications = [];
+  notificationUnreadCount = 0;
+  notificationsOpen = false;
+  notificationsAvailable = true;
+  if (notificationPollTimer) window.clearInterval(notificationPollTimer);
+  notificationPollTimer = null;
+  renderNotificationsPanel();
+}
+
+function startNotificationPolling() {
+  if (notificationPollTimer) window.clearInterval(notificationPollTimer);
+  notificationPollTimer = window.setInterval(async () => {
+    if (notificationPollRunning || !currentUser) return;
+    notificationPollRunning = true;
+    try {
+      await refreshNotifications();
+    } catch (error) {
+      handleNotificationError(error);
+    } finally {
+      notificationPollRunning = false;
+    }
+  }, 20000);
+}
+
+function handleNotificationError(error) {
+  notificationsAvailable = false;
+  renderNotificationsPanel();
+  if (!notificationErrorShown) {
+    console.error("Loading store notifications failed:", error);
+    notificationErrorShown = true;
+  }
+}
+
+async function markNotificationRead(notificationId) {
+  if (!supabaseClient || !currentUser) return;
+  const { error } = await supabaseClient.from("notifications")
+    .update({ read_at: new Date().toISOString() })
+    .eq("id", notificationId)
+    .eq("user_id", currentUser.id)
+    .is("read_at", null);
+  if (error) throw error;
+}
+
+async function markAllNotificationsRead() {
+  if (!supabaseClient || !currentUser) return;
+  const { error } = await supabaseClient.from("notifications")
+    .update({ read_at: new Date().toISOString() })
+    .eq("user_id", currentUser.id)
+    .is("read_at", null);
+  if (error) throw error;
+  await refreshNotifications();
 }
 
 function updateSocialLinks() {
@@ -1011,7 +1203,10 @@ async function loadProfile(user) {
   currentUser = user;
   profile = null;
   canUseSupportChat = false;
-  if (!supabaseClient || !user) return;
+  if (!supabaseClient || !user) {
+    clearNotifications();
+    return;
+  }
 
   const { data, error } = await supabaseClient
     .from("profiles")
@@ -1022,12 +1217,18 @@ async function loadProfile(user) {
   profile = data;
   if (profile.role === "admin") {
     canUseSupportChat = true;
-    return;
+  } else {
+    const { data: supportAccess, error: supportError } = await supabaseClient.rpc("can_use_support_chat");
+    if (supportError) throw supportError;
+    canUseSupportChat = supportAccess === true;
   }
 
-  const { data: supportAccess, error: supportError } = await supabaseClient.rpc("can_use_support_chat");
-  if (supportError) throw supportError;
-  canUseSupportChat = supportAccess === true;
+  try {
+    await refreshNotifications();
+  } catch (error) {
+    handleNotificationError(error);
+  }
+  startNotificationPolling();
 }
 
 async function loadStoreData() {
@@ -1077,7 +1278,10 @@ function applyBackgroundImage() {
 function reportError(error, context) {
   console.error(context, error);
   const missingSchema = ["PGRST202", "PGRST205", "42P01", "42883"].includes(error?.code);
-  showToast(missingSchema ? text("supportSchemaMissing") : error?.message || String(error));
+  const missingSchemaMessage = context.toLowerCase().includes("notification")
+    ? text("notificationsSetup")
+    : text("supportSchemaMissing");
+  showToast(missingSchema ? missingSchemaMessage : error?.message || String(error));
 }
 
 async function uploadImage(file) {
@@ -1255,10 +1459,38 @@ async function updateOrderStatus(orderId, status) {
 /* أحداث الأزرار والنماذج */
 document.addEventListener("click", event => {
   const button = event.target.closest("[data-action]");
-  if (!button) return;
+  if (!button) {
+    if (notificationsOpen && !event.target.closest(".notification-wrap")) {
+      notificationsOpen = false;
+      renderNotificationsPanel();
+    }
+    return;
+  }
 
   const id = Number(button.dataset.id);
   const action = button.dataset.action;
+
+  if (action === "toggle-notifications") {
+    notificationsOpen = !notificationsOpen;
+    renderNotificationsPanel();
+    return;
+  }
+  if (action === "mark-all-notifications") {
+    runSafely(markAllNotificationsRead, "Marking notifications as read");
+    return;
+  }
+  if (action === "open-notification") {
+    const destination = button.dataset.href;
+    runSafely(async () => {
+      await markNotificationRead(button.dataset.id);
+      await refreshNotifications();
+      notificationsOpen = false;
+      renderNotificationsPanel();
+      if (destination.startsWith("product-")) await loadStoreData();
+      if (destination) location.hash = destination;
+    }, "Opening notification");
+    return;
+  }
 
   if (action === "add") addToCart(id);
   if (action === "detail") location.hash = `product-${id}`;
@@ -1276,6 +1508,7 @@ document.addEventListener("click", event => {
       currentUser = null;
       profile = null;
       canUseSupportChat = false;
+      clearNotifications();
       location.hash = "home";
       render();
     }, "Signing out");
